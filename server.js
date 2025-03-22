@@ -1,9 +1,15 @@
 const express = require("express");
-const http = require("http");
+const https = require("https"); // Use the HTTPS module
 const socketIO = require("socket.io");
-
+const fs = require("fs");
 const app = express();
-const server = http.createServer(app);
+
+const options = {
+	key: fs.readFileSync("/etc/ssl/private/164.52.215.33.key"),
+	cert: fs.readFileSync("/etc/ssl/certs/164.52.215.33.crt"),
+};
+
+const server = https.createServer(options, app); // Create HTTPS server
 const io = socketIO(server, { cors: { origin: "*" } });
 
 // In-memory storage for the examiner and student sockets.
@@ -38,12 +44,10 @@ io.on("connection", (socket) => {
 
 	// Relay signaling messages.
 	socket.on("signal", async (data) => {
-		// If a student sends a signal, forward it to the examiner.
 		if (role === "student" && examinerSocket) {
 			data.from = clientId;
 			examinerSocket.emit("signal", data);
 		}
-		// If the examiner sends a signal with a target, forward it to that student.
 		if (role === "examiner" && data.target) {
 			const targetSocket = studentSockets[data.target];
 			if (targetSocket) {
@@ -69,6 +73,6 @@ io.on("connection", (socket) => {
 	});
 });
 
-server.listen(4051, () => {
-	console.log("Simplified signaling server running on 4051");
+server.listen(4050, () => {
+	console.log("Simplified signaling server running on 4050");
 });
