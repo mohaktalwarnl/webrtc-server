@@ -69,6 +69,6 @@ io.on("connection", (socket) => {
 	});
 });
 
-server.listen(process.env.PORT || 4050, () => {
-	console.log("Simplified signaling server running");
+server.listen(4051, () => {
+	console.log("Simplified signaling server running on 4051");
 });
