@@ -3,13 +3,35 @@ const https = require("https"); // Use the HTTPS module
 const socketIO = require("socket.io");
 const fs = require("fs");
 const app = express();
+require("dotenv").config();
 
 const options = {
 	key: fs.readFileSync("/etc/ssl/private/164.52.215.33.key"),
 	cert: fs.readFileSync("/etc/ssl/certs/164.52.215.33.crt"),
 };
 
-const server = https.createServer(options, app); // Create HTTPS server
+const sendLog = async (level, message, additional_info = {}) => {
+	try {
+		const logPayload = {
+			timestamp: new Date().toISOString(), // ISO formatted UTC timestamp
+			service: "signaling-server",
+			level: level,
+			message: message,
+			additional_info: additional_info,
+		};
+
+		// Use process.env.LOG_ENDPOINT to specify your log API endpoint
+		await fetch(process.env.LOG_ENDPOINT, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(logPayload),
+		});
+	} catch (error) {
+		console.error("Error sending log:", error);
+	}
+};
+
+const server = https.createServer(app); // Create HTTPS server
 const io = socketIO(server, { cors: { origin: "*" } });
 
 // In-memory storage for the examiner and student sockets.
@@ -28,6 +50,7 @@ io.on("connection", (socket) => {
 	// Use a fixed room for all connections in this exam.
 	const room = `exam:${examId}`;
 	socket.join(room);
+	sendLog("INFO", `${clientId} connected as ${role} in room ${room}`);
 	console.log(`${clientId} connected as ${role} in room ${room}`);
 
 	if (role === "examiner") {
@@ -53,6 +76,7 @@ io.on("connection", (socket) => {
 			if (targetSocket) {
 				targetSocket.emit("signal", data);
 			} else {
+				sendLog("INFO", `Student socket not found for ${data.target}`);
 				console.error(`Student socket not found for ${data.target}`);
 			}
 		}
@@ -60,6 +84,7 @@ io.on("connection", (socket) => {
 
 	socket.on("disconnect", () => {
 		console.log(`${clientId} disconnected from room ${room}`);
+		sendLog("INFO", `${clientId} disconnected from room ${room}`);
 		if (role === "student") {
 			delete studentSockets[clientId];
 			if (examinerSocket) {
@@ -74,5 +99,6 @@ io.on("connection", (socket) => {
 });
 
 server.listen(4050, () => {
+	sendLog("INFO", `Simplified signaling server running on 4050`);
 	console.log("Simplified signaling server running on 4050");
 });
