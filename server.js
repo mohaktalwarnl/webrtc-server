@@ -67,17 +67,28 @@ io.on("connection", (socket) => {
 
 	// Relay signaling messages.
 	socket.on("signal", async (data) => {
+		// If the sender is a student, forward its signal to the examiner.
 		if (role === "student" && examinerSocket) {
 			data.from = clientId;
 			examinerSocket.emit("signal", data);
 		}
-		if (role === "examiner" && data.target) {
-			const targetSocket = studentSockets[data.target];
-			if (targetSocket) {
-				targetSocket.emit("signal", data);
-			} else {
-				sendLog("INFO", `Student socket not found for ${data.target}`);
-				console.error(`Student socket not found for ${data.target}`);
+		// If the sender is the examiner:
+		if (role === "examiner") {
+			// If target is "all", broadcast to every student.
+			if (data.target === "all") {
+				console.log("Server: Broadcasting ready signal to all students.");
+				for (const studentId in studentSockets) {
+					studentSockets[studentId].emit("signal", data);
+				}
+			} else if (data.target) {
+				// Otherwise, forward to the specific student.
+				const targetSocket = studentSockets[data.target];
+				if (targetSocket) {
+					targetSocket.emit("signal", data);
+				} else {
+					sendLog("INFO", `Student socket not found for ${data.target}`);
+					console.error(`Student socket not found for ${data.target}`);
+				}
 			}
 		}
 	});
