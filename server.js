@@ -31,7 +31,7 @@ const sendLog = async (level, message, additional_info = {}) => {
 	}
 };
 
-const server = https.createServer(app); // Create HTTPS server
+const server = https.createServer(options, app); // Create HTTPS server
 const io = socketIO(server, { cors: { origin: "*" } });
 
 // In-memory storage for the examiner and student sockets.
