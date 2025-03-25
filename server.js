@@ -74,23 +74,15 @@ io.on("connection", (socket) => {
 		}
 		// If the sender is the examiner:
 		if (role === "examiner") {
+			// If target is "all", broadcast to every student.
 			if (data.target === "all") {
 				console.log("Server: Broadcasting ready signal to all students.");
-				// Get all socket IDs in the room.
-				io.in(room)
-					.allSockets()
-					.then((socketIds) => {
-						for (const socketId of socketIds) {
-							const targetSocket = io.of("/").sockets.get(socketId);
-							// Check if the connected socket is a student.
-							if (targetSocket && targetSocket.handshake.query.role === "student") {
-								targetSocket.emit("signal", data);
-							}
-						}
-					});
+				for (const studentId in studentSockets) {
+					studentSockets[studentId].emit("signal", data);
+				}
 			} else if (data.target) {
 				// Otherwise, forward to the specific student.
-				const targetSocket = io.of("/").sockets.get(data.target);
+				const targetSocket = studentSockets[data.target];
 				if (targetSocket) {
 					targetSocket.emit("signal", data);
 				} else {
