@@ -1,5 +1,5 @@
 const express = require("express");
-const https = require("https"); // Use the HTTPS module
+const https = require("https");
 const socketIO = require("socket.io");
 const fs = require("fs");
 const app = express();
@@ -13,14 +13,13 @@ const options = {
 const sendLog = async (level, message, additional_info = {}) => {
 	try {
 		const logPayload = {
-			timestamp: new Date().toISOString(), // ISO formatted UTC timestamp
+			timestamp: new Date().toISOString(),
 			service: "signaling-server",
 			level: level,
 			message: message,
 			additional_info: additional_info,
 		};
 
-		// Use process.env.LOG_ENDPOINT to specify your log API endpoint
 		await fetch(process.env.LOG_ENDPOINT, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -31,10 +30,10 @@ const sendLog = async (level, message, additional_info = {}) => {
 	}
 };
 
-const server = https.createServer(options, app); // Create HTTPS server
+const server = https.createServer(options, app);
 const io = socketIO(server, { cors: { origin: "*" } });
 
-// In-memory storage for the examiner and student sockets.
+// In-memory storage for examiner and student sockets.
 let examinerSocket = null;
 const studentSockets = {};
 
@@ -53,35 +52,55 @@ io.on("connection", (socket) => {
 	sendLog("INFO", `${clientId} connected as ${role} in room ${room}`);
 	console.log(`${clientId} connected as ${role} in room ${room}`);
 
+	// Heartbeat handling: reply to heartbeat pings from clients.
+	socket.on("heartbeat", (data) => {
+		console.log(`Received heartbeat from ${data.clientId} in exam ${data.examId}`);
+		socket.emit("heartbeat-ack", { timestamp: Date.now(), message: "pong" });
+	});
+
 	if (role === "examiner") {
 		examinerSocket = socket;
-		// Optionally notify the examiner of current students:
 		socket.emit("room-assigned", { room });
+
+		// When examiner joins, fetch all active student client IDs from external API.
+		// We assume the external API uses examId as the room identifier.
+		const url = `${process.env.MONGOAPI_ENDPOINT}/socket/getsocketbyroom/${room}`;
+		fetch(url)
+			.then((res) => res.json())
+			.then((responseData) => {
+				if (!responseData.error && responseData.status === 200 && responseData.data && Array.isArray(responseData.data.client_id)) {
+					responseData.data.client_id.forEach((studentId) => {
+						console.log(`Notifying examiner of active student: ${studentId}`);
+						examinerSocket.emit("new-student", { clientId: `student_${studentId}` });
+					});
+				} else {
+					console.error("Failed to fetch active students from external API:", responseData);
+				}
+			})
+			.catch((err) => {
+				console.error("Error fetching active students from external API:", err);
+			});
 	} else if (role === "student") {
 		studentSockets[clientId] = socket;
-		// Notify the examiner that a new student has joined.
+		// Immediately notify examiner if already connected.
 		if (examinerSocket) {
 			examinerSocket.emit("new-student", { clientId });
 		}
 	}
 
 	// Relay signaling messages.
-	socket.on("signal", async (data) => {
-		// If the sender is a student, forward its signal to the examiner.
+	socket.on("signal", (data) => {
 		if (role === "student" && examinerSocket) {
 			data.from = clientId;
 			examinerSocket.emit("signal", data);
 		}
-		// If the sender is the examiner:
 		if (role === "examiner") {
-			// If target is "all", broadcast to every student.
 			if (data.target === "all") {
 				console.log("Server: Broadcasting ready signal to all students.");
 				for (const studentId in studentSockets) {
 					studentSockets[studentId].emit("signal", data);
 				}
 			} else if (data.target) {
-				// Otherwise, forward to the specific student.
 				const targetSocket = studentSockets[data.target];
 				if (targetSocket) {
 					targetSocket.emit("signal", data);
