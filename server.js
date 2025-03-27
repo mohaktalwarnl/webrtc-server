@@ -58,6 +58,12 @@ io.on("connection", (socket) => {
 		socket.emit("heartbeat-ack", { timestamp: Date.now(), message: "pong" });
 	});
 
+	socket.on("issue_detected", (data) => {
+		if (examinerSocket) {
+			examinerSocket.emit("issue_detected", data);
+		}
+	});
+
 	if (role === "examiner") {
 		examinerSocket = socket;
 		socket.emit("room-assigned", { room });
