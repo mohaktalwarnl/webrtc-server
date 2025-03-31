@@ -38,7 +38,7 @@ let examinerSocket = null;
 const studentSockets = {};
 
 io.on("connection", (socket) => {
-	const { role, clientId, examId } = socket.handshake.query;
+	const { role, clientId, examId, candidateName } = socket.handshake.query;
 
 	if (!role || !clientId || !examId) {
 		socket.emit("error", { message: "Missing required parameters (role, clientId, examId)" });
@@ -77,7 +77,7 @@ io.on("connection", (socket) => {
 				if (!responseData.error && responseData.status === 200 && responseData.data && Array.isArray(responseData.data.client_id)) {
 					responseData.data.client_id.forEach((studentId) => {
 						console.log(`Notifying examiner of active student: ${studentId}`);
-						examinerSocket.emit("new-student", { clientId: `student_${studentId}` });
+						examinerSocket.emit("new-student", { clientId: `student_${studentId}`, candidateName: candidateName });
 					});
 				} else {
 					console.error("Failed to fetch active students from external API:", responseData);
@@ -90,7 +90,7 @@ io.on("connection", (socket) => {
 		studentSockets[clientId] = socket;
 		// Immediately notify examiner if already connected.
 		if (examinerSocket) {
-			examinerSocket.emit("new-student", { clientId });
+			examinerSocket.emit("new-student", { clientId, candidateName });
 		}
 	}
 
@@ -98,6 +98,7 @@ io.on("connection", (socket) => {
 	socket.on("signal", (data) => {
 		if (role === "student" && examinerSocket) {
 			data.from = clientId;
+			data.candidateName = candidateName;
 			examinerSocket.emit("signal", data);
 		}
 		if (role === "examiner") {
