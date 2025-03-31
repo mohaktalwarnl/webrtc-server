@@ -76,8 +76,13 @@ io.on("connection", (socket) => {
 			.then((responseData) => {
 				if (!responseData.error && responseData.status === 200 && responseData.data && Array.isArray(responseData.data.client_id)) {
 					responseData.data.client_id.forEach((studentId) => {
+						// Check if the student socket has a candidateName; if not, default to "Unknown"
+						let name = "Unknown";
+						if (studentSockets[studentId] && studentSockets[studentId].candidateName) {
+							name = studentSockets[studentId].candidateName;
+						}
 						console.log(`Notifying examiner of active student: ${studentId}`);
-						examinerSocket.emit("new-student", { clientId: `student_${studentId}`, candidateName: candidateName });
+						examinerSocket.emit("new-student", { clientId: `student_${studentId}`, candidateName: name });
 					});
 				} else {
 					console.error("Failed to fetch active students from external API:", responseData);
@@ -87,10 +92,12 @@ io.on("connection", (socket) => {
 				console.error("Error fetching active students from external API:", err);
 			});
 	} else if (role === "student") {
+		// Store candidateName on the student socket (using a default if not provided)
+		socket.candidateName = candidateName || "Unknown";
 		studentSockets[clientId] = socket;
 		// Immediately notify examiner if already connected.
 		if (examinerSocket) {
-			examinerSocket.emit("new-student", { clientId, candidateName });
+			examinerSocket.emit("new-student", { clientId, candidateName: socket.candidateName });
 		}
 	}
 
@@ -98,7 +105,8 @@ io.on("connection", (socket) => {
 	socket.on("signal", (data) => {
 		if (role === "student" && examinerSocket) {
 			data.from = clientId;
-			data.candidateName = candidateName;
+			// Always include candidateName from the student socket.
+			data.candidateName = socket.candidateName;
 			examinerSocket.emit("signal", data);
 		}
 		if (role === "examiner") {
