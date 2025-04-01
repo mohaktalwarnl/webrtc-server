@@ -75,12 +75,13 @@ io.on("connection", (socket) => {
 			.then((res) => res.json())
 			.then((responseData) => {
 				if (!responseData.error && responseData.status === 200 && responseData.data && Array.isArray(responseData.data.client_id)) {
-					responseData.data.client_id.forEach((studentId) => {
+					responseData.data.client_id.forEach((client) => {
 						// Check if the student socket has a candidateName; if not, default to "Unknown"
-						let name = "Unknown";
-						if (studentSockets[studentId] && studentSockets[studentId].candidateName) {
-							name = studentSockets[studentId].candidateName;
-						}
+						let name = client.user_name || "Unknown";
+						let studentId = client.client_id;
+						// if (studentSockets[studentId] && studentSockets[studentId].candidateName) {
+						// 	name = studentSockets[studentId].candidateName;
+						// }
 						console.log(`Notifying examiner of active student: ${studentId}`);
 						examinerSocket.emit("new-student", { clientId: `student_${studentId}`, candidateName: name });
 					});
