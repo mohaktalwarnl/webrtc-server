@@ -6,8 +6,8 @@ const app = express();
 require("dotenv").config();
 
 const options = {
-	key: fs.readFileSync("/etc/ssl/private/164.52.215.33.key"),
-	cert: fs.readFileSync("/etc/ssl/certs/164.52.215.33.crt"),
+	key: fs.readFileSync("/etc/nginx/ssl/STAR.netcomlearning.com.key"),
+	cert: fs.readFileSync("/etc/nginx/ssl/STAR.netcomlearning.com.ssl-bundle.crt"),
 };
 
 const sendLog = async (level, message, additional_info = {}) => {
