@@ -38,7 +38,8 @@ let examinerSocket = null;
 const studentSockets = {};
 
 io.on("connection", (socket) => {
-	const { role, clientId, examId, candidateName } = socket.handshake.query;
+	const { role, clientId, examId } = socket.handshake.query;
+	const candidateName = socket.handshake.auth?.candidateName ?? socket.handshake.query?.candidateName;
 
 	if (!role || !clientId || !examId) {
 		socket.emit("error", { message: "Missing required parameters (role, clientId, examId)" });
@@ -46,13 +47,12 @@ io.on("connection", (socket) => {
 		return;
 	}
 
-	// Use a fixed room for all connections in this exam.
 	const room = `exam:${examId}`;
 	socket.join(room);
 	sendLog("INFO", `${clientId} connected as ${role} in room ${room}`);
 	console.log(`${clientId} connected as ${role} in room ${room}`);
 
-	// Heartbeat handling: reply to heartbeat pings from clients.
+	// Heartbeat handling
 	socket.on("heartbeat", (data) => {
 		console.log(`Received heartbeat from ${data.clientId} in exam ${data.examId}`);
 		socket.emit("heartbeat-ack", { timestamp: Date.now(), message: "pong" });
@@ -68,22 +68,22 @@ io.on("connection", (socket) => {
 		examinerSocket = socket;
 		socket.emit("room-assigned", { room });
 
-		// When examiner joins, fetch all active student client IDs from external API.
-		// We assume the external API uses examId as the room identifier.
+		// Fetch all active student IDs and notify examiner, but prefer in-memory names
 		const url = `${process.env.MONGOAPI_ENDPOINT}/socket/getsocketbyroom/${room}`;
 		fetch(url)
 			.then((res) => res.json())
 			.then((responseData) => {
 				if (!responseData.error && responseData.status === 200 && responseData.data && Array.isArray(responseData.data.client_id)) {
 					responseData.data.client_id.forEach((client) => {
-						// Check if the student socket has a candidateName; if not, default to "Unknown"
-						let name = client.user_name || "Unknown";
-						let studentId = client.client_id;
-						// if (studentSockets[studentId] && studentSockets[studentId].candidateName) {
-						// 	name = studentSockets[studentId].candidateName;
-						// }
-						console.log(`Notifying examiner of active student: ${studentId}`);
-						examinerSocket.emit("new-student", { clientId: `student_${studentId}`, candidateName: name });
+						const studentId = client.client_id;
+						const key = `student_${studentId}`;
+						// Prefer the live socket's name if present
+						let name = studentSockets[key]?.candidateName || client.user_name || "Unknown";
+						console.log(`Notifying examiner of active student ${studentId} as "${name}"`);
+						examinerSocket.emit("new-student", {
+							clientId: key,
+							candidateName: name,
+						});
 					});
 				} else {
 					console.error("Failed to fetch active students from external API:", responseData);
@@ -93,12 +93,16 @@ io.on("connection", (socket) => {
 				console.error("Error fetching active students from external API:", err);
 			});
 	} else if (role === "student") {
-		// Store candidateName on the student socket (using a default if not provided)
+		// Persist the name on this socket
 		socket.candidateName = candidateName || "Unknown";
 		studentSockets[clientId] = socket;
-		// Immediately notify examiner if already connected.
+		console.log(`Registered student ${clientId} as "${socket.candidateName}"`);
+		// Notify examiner immediately if connected
 		if (examinerSocket) {
-			examinerSocket.emit("new-student", { clientId, candidateName: socket.candidateName });
+			examinerSocket.emit("new-student", {
+				clientId,
+				candidateName: socket.candidateName,
+			});
 		}
 	}
 
@@ -106,7 +110,6 @@ io.on("connection", (socket) => {
 	socket.on("signal", (data) => {
 		if (role === "student" && examinerSocket) {
 			data.from = clientId;
-			// Always include candidateName from the student socket.
 			data.candidateName = socket.candidateName;
 			examinerSocket.emit("signal", data);
 		}
