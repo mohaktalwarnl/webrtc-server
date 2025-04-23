@@ -1,5 +1,5 @@
 const express = require("express");
-const https = require("https");
+const http = require("http");
 const socketIO = require("socket.io");
 const fs = require("fs");
 const app = express();
@@ -30,7 +30,7 @@ const sendLog = async (level, message, additional_info = {}) => {
 	}
 };
 
-const server = https.createServer(options, app);
+const server = http.createServer(options, app);
 const io = socketIO(server, { cors: { origin: "*" } });
 
 // In-memory storage for examiner and student sockets.
