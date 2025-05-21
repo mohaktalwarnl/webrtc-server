@@ -33,7 +33,6 @@ const sendLog = async (level, message, additional_info = {}) => {
 const server = http.createServer(options, app);
 const io = socketIO(server, { cors: { origin: "*" } });
 
-// In-memory storage for examiner and student sockets.
 let examinerSocket = null;
 const studentSockets = {};
 
@@ -42,7 +41,7 @@ io.on("connection", (socket) => {
 	const candidateName = socket.handshake.auth?.candidateName ?? socket.handshake.query?.candidateName;
 
 	if (!role || !clientId || !examId) {
-		socket.emit("error", { message: "Missing required parameters (role, clientId, examId)" });
+		socket.emit("error", { message: "Missing parameters" });
 		socket.disconnect();
 		return;
 	}
@@ -52,61 +51,42 @@ io.on("connection", (socket) => {
 	sendLog("INFO", `${clientId} connected as ${role} in room ${room}`);
 	console.log(`${clientId} connected as ${role} in room ${room}`);
 
-	// Heartbeat handling
 	socket.on("heartbeat", (data) => {
 		console.log(`Received heartbeat from ${data.clientId} in exam ${data.examId}`);
 		socket.emit("heartbeat-ack", { timestamp: Date.now(), message: "pong" });
 	});
 
 	socket.on("issue_detected", (data) => {
-		if (examinerSocket) {
-			examinerSocket.emit("issue_detected", data);
-		}
+		if (examinerSocket) examinerSocket.emit("issue_detected", data);
 	});
 
 	if (role === "examiner") {
 		examinerSocket = socket;
 		socket.emit("room-assigned", { room });
 
-		// Fetch all active student IDs and notify examiner, but prefer in-memory names
 		const url = `${process.env.MONGOAPI_ENDPOINT}/socket/getsocketbyroom/${room}`;
 		fetch(url)
-			.then((res) => res.json())
-			.then((responseData) => {
-				if (!responseData.error && responseData.status === 200 && responseData.data && Array.isArray(responseData.data.client_id)) {
-					responseData.data.client_id.forEach((client) => {
-						const studentId = client.client_id;
-						const key = `student_${studentId}`;
-						// Prefer the live socket's name if present
-						let name = studentSockets[key]?.candidateName || client.user_name || "Unknown";
-						console.log(`Notifying examiner of active student ${studentId} as "${name}"`);
-						examinerSocket.emit("new-student", {
-							clientId: key,
-							candidateName: name,
-						});
+			.then((r) => r.json())
+			.then((body) => {
+				if (body.status === 200 && Array.isArray(body.data.client_id)) {
+					body.data.client_id.forEach((c) => {
+						const id = c.client_id;
+						const name = studentSockets[id]?.candidateName || c.user_name || "Unknown";
+						console.log(`Notifying examiner of active student ${id} as "${name}"`);
+						examinerSocket.emit("new-student", { clientId: id, candidateName: name });
 					});
-				} else {
-					console.error("Failed to fetch active students from external API:", responseData);
 				}
 			})
-			.catch((err) => {
-				console.error("Error fetching active students from external API:", err);
-			});
+			.catch((e) => console.error("Fetch error:", e));
 	} else if (role === "student") {
-		// Persist the name on this socket
 		socket.candidateName = candidateName || "Unknown";
 		studentSockets[clientId] = socket;
 		console.log(`Registered student ${clientId} as "${socket.candidateName}"`);
-		// Notify examiner immediately if connected
 		if (examinerSocket) {
-			examinerSocket.emit("new-student", {
-				clientId,
-				candidateName: socket.candidateName,
-			});
+			examinerSocket.emit("new-student", { clientId, candidateName: socket.candidateName });
 		}
 	}
 
-	// Relay signaling messages.
 	socket.on("signal", (data) => {
 		if (role === "student" && examinerSocket) {
 			data.from = clientId;
@@ -114,31 +94,27 @@ io.on("connection", (socket) => {
 			examinerSocket.emit("signal", data);
 		}
 		if (role === "examiner") {
-			if (data.target === "all") {
-				console.log("Server: Broadcasting ready signal to all students.");
-				for (const studentId in studentSockets) {
-					studentSockets[studentId].emit("signal", data);
-				}
-			} else if (data.target) {
-				const targetSocket = studentSockets[data.target];
-				if (targetSocket) {
-					targetSocket.emit("signal", data);
+			const tgt = data.target;
+			if (tgt === "all") {
+				Object.values(studentSockets).forEach((s) => s.emit("signal", data));
+			} else if (tgt) {
+				const s = studentSockets[tgt];
+				if (s) {
+					s.emit("signal", data);
 				} else {
-					sendLog("INFO", `Student socket not found for ${data.target}`);
-					console.error(`Student socket not found for ${data.target}`);
+					sendLog("INFO", `Student socket not found for ${tgt}`);
+					console.error(`Student socket not found: ${tgt}`);
 				}
 			}
 		}
 	});
 
 	socket.on("disconnect", () => {
-		console.log(`${clientId} disconnected from room ${room}`);
-		sendLog("INFO", `${clientId} disconnected from room ${room}`);
+		console.log(`${clientId} disconnected`);
+		sendLog("INFO", `${clientId} disconnected`);
 		if (role === "student") {
 			delete studentSockets[clientId];
-			if (examinerSocket) {
-				examinerSocket.emit("student-disconnected", { clientId });
-			}
+			if (examinerSocket) examinerSocket.emit("student-disconnected", { clientId });
 		}
 		if (role === "examiner") {
 			examinerSocket = null;
@@ -148,6 +124,6 @@ io.on("connection", (socket) => {
 });
 
 server.listen(4050, () => {
-	sendLog("INFO", `Simplified signaling server running on 4050`);
-	console.log("Simplified signaling server running on 4050");
+	sendLog("INFO", "Signaling server running on 4050");
+	console.log("Server listening on 4050");
 });
