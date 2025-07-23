@@ -1,7 +1,6 @@
 const express = require("express");
 const http = require("http");
-const https = require("https");
-const cors = require("cors"); /
+const cors = require("cors"); 
 const { Server } = require("socket.io");
 const { createAdapter } = require("@socket.io/redis-adapter");
 const { createClient } = require("redis");
@@ -11,18 +10,18 @@ app.use(cors({ origin: "*" }));
 require("dotenv").config();
 
 // --- Configuration ---
-let serverOptions;
-try {
-    serverOptions = {
-        key: fs.readFileSync(process.env.SSL_KEY_PATH || "/etc/nginx/ssl/STAR.netcomlearning.com.key"),
-        cert: fs.readFileSync(process.env.SSL_CERT_PATH || "/etc/nginx/ssl/STAR.netcomlearning.com.ssl-bundle.crt"),
-    };
-} catch (error) {
-    console.error("Warning: Could not read SSL certificates. Server will start without HTTPS.", error.message);
-}
+// let serverOptions;
+// try {
+//     serverOptions = {
+//         key: fs.readFileSync(process.env.SSL_KEY_PATH || "/etc/nginx/ssl/STAR.netcomlearning.com.key"),
+//         cert: fs.readFileSync(process.env.SSL_CERT_PATH || "/etc/nginx/ssl/STAR.netcomlearning.com.ssl-bundle.crt"),
+//     };
+// } catch (error) {
+//     console.error("Warning: Could not read SSL certificates. Server will start without HTTPS.", error.message);
+// }
 
 const PORT = process.env.PORT || 4050;
-const server = serverOptions ? https.createServer(serverOptions, app) : http.createServer(app);
+const server = http.createServer(app);
 
 // --- Robust Logging ---
 const sendLog = async (level, message, additional_info = {}) => {
