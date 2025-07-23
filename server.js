@@ -1,11 +1,13 @@
 const express = require("express");
 const http = require("http");
 const https = require("https");
+const cors = require("cors"); /
 const { Server } = require("socket.io");
-const { createAdapter } = require("socket.io-redis");
+const { createAdapter } = require("@socket.io/redis-adapter");
 const { createClient } = require("redis");
 const fs = require("fs");
 const app = express();
+app.use(cors({ origin: "*" }));
 require("dotenv").config();
 
 // --- Configuration ---
