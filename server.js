@@ -212,6 +212,29 @@ async function run() {
             callback({ error: e.message });
         }
     });
+
+    socket.on('private-message', ({ toClientId, message }) => {
+      if (!roomName) return;
+
+      const room = rooms.get(roomName);
+      if (!room) return;
+
+      const senderPeer = room.peers.get(socket.id);
+      if (!senderPeer) return;
+
+      const toSocketEntry = Array.from(room.peers.entries()).find(
+        ([, peer]) => peer.client_id === toClientId
+      );
+
+      if (toSocketEntry) {
+        const [toSocketId] = toSocketEntry;
+        io.to(toSocketId).emit('private-message', {
+          fromClientId: senderPeer.client_id,
+          fromName: senderPeer.name,
+          message
+        });
+      }
+    });
   });
 
   const PORT = process.env.PORT || 4000;
