@@ -16,6 +16,7 @@
 	},
 	"dependencies": {
 		"@socket.io/redis-adapter": "^8.3.0",
+		"amqplib": "^0.10.8",
 		"cors": "^2.8.5",
 		"express": "^4.21.2",
 		"mediasoup": "^3.16.7",
