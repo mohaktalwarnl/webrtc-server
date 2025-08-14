@@ -44,6 +44,7 @@ async function run() {
         socket.join(roomName)
         const client_id = socket.handshake.query.client_id;
         const name = socket.handshake.query.name || 'Unknown';
+        const isExaminer = socket.handshake.query.isExaminer === 'true';
         const { router, peers } = await getOrCreateRoom(roomName);
 
         // A new peer joins the room
@@ -52,7 +53,8 @@ async function run() {
           producers: new Map(),
           consumers: new Map(),
           client_id,
-          name
+          name,
+          isExaminer
         });
 
         // Get a list of existing producers in the room
@@ -147,7 +149,7 @@ async function run() {
         });
 
         // Inform everyone else in the room about the new producer
-        socket.to(roomName).emit('new-producer', { producerId: producer.id, kind: producer.kind, peerId: socket.id, client_id:  room.peers.get(socket.id).client_id, name:  room.peers.get(socket.id).name });
+        socket.to(roomName).emit('new-producer', { producerId: producer.id, kind: producer.kind, peerId: socket.id, client_id:  room.peers.get(socket.id).client_id, name:  room.peers.get(socket.id).name, isExaminer: room.peers.get(socket.id).isExaminer });
         callback({ id: producer.id });
 
       } catch (e) {
