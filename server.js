@@ -237,6 +237,34 @@ async function run() {
         });
       }
     });
+
+    // Exam Violation Detection Event
+    socket.on('exam-violation-detected', ({ toClientId, violationDetails }) => {
+      if (!roomName) return;
+
+      const room = rooms.get(roomName);
+      if (!room) return;
+
+      const senderPeer = room.peers.get(socket.id);
+      if (!senderPeer) return;
+
+      let examinerEntry;
+      for (const [socketId, peer] of room.peers) {
+        if (peer.isExaminer && peer.client_id === toClientId) {
+          examinerEntry = [socketId, peer];
+          break;
+        }
+      }
+
+      if (examinerEntry) {
+        const [toSocketId] = examinerEntry;
+        io.to(toSocketId).emit('exam-violation-detected', {
+          fromClientId: senderPeer.client_id,
+          fromName: senderPeer.name,
+          violationDetails
+        });
+      }
+    });
   });
 
   const PORT = process.env.PORT || 4000;
