@@ -237,6 +237,23 @@ async function run() {
         });
       }
     });
+
+    // Exam Violation Detection Event
+    socket.on('issue-detected', ({ violationDetails }) => {
+      if (!roomName) return;
+
+      const room = rooms.get(roomName);
+      if (!room) return;
+
+      const senderPeer = room.peers.get(socket.id);
+      if (!senderPeer) return;
+
+      socket.to(roomName).emit('issue-detected', {
+        fromClientId: senderPeer.client_id,
+        fromName: senderPeer.name,
+        violationDetails
+      });
+    });
   });
 
   const PORT = process.env.PORT || 4000;
