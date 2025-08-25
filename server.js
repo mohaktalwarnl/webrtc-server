@@ -239,7 +239,7 @@ async function run() {
     });
 
     // Exam Violation Detection Event
-    socket.on('exam-violation-detected', ({ toClientId, violationDetails }) => {
+    socket.on('issue-detected', ({ violationDetails }) => {
       if (!roomName) return;
 
       const room = rooms.get(roomName);
@@ -248,12 +248,11 @@ async function run() {
       const senderPeer = room.peers.get(socket.id);
       if (!senderPeer) return;
 
-     
-        io.to(toSocketId).emit('exam-violation-detected', {
-          fromClientId: senderPeer.client_id,
-          fromName: senderPeer.name,
-          violationDetails
-        });
+      socket.to(roomName).emit('issue-detected', {
+        fromClientId: senderPeer.client_id,
+        fromName: senderPeer.name,
+        violationDetails
+      });
     });
   });
 
