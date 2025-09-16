@@ -247,6 +247,23 @@ async function run() {
 				});
 			}
 		});
+
+		// Exam Violation Detection Event
+		socket.on("issue-detected", ({ violationDetails }) => {
+			if (!roomName) return;
+
+			const room = rooms.get(roomName);
+			if (!room) return;
+
+			const senderPeer = room.peers.get(socket.id);
+			if (!senderPeer) return;
+
+			socket.to(roomName).emit("issue-detected", {
+				fromClientId: senderPeer.client_id,
+				fromName: senderPeer.name,
+				violationDetails,
+			});
+		});
 	});
 
 	const PORT = process.env.PORT || 4000;
@@ -287,12 +304,7 @@ async function getOrCreateRoom(roomName) {
 			mediaCodecs: [
 				{ kind: "audio", mimeType: "audio/opus", clockRate: 48000, channels: 2 },
 				{ kind: "video", mimeType: "video/VP8", clockRate: 90000 },
-				{
-					kind: "video",
-					mimeType: "video/H264",
-					clockRate: 90000,
-					parameters: { "packetization-mode": 1, "profile-level-id": "42e01f", "level-asymmetry-allowed": 1 },
-				},
+				// { kind: 'video', mimeType: 'video/H264', clockRate: 90000, parameters: { 'packetization-mode': 1, 'profile-level-id': '42e01f', 'level-asymmetry-allowed': 1 } },
 			],
 		});
 		room = { router, peers: new Map() };
