@@ -154,14 +154,16 @@ async function run() {
 				});
 
 				// Inform everyone else in the room about the new producer
-				socket.to(roomName).emit("new-producer", {
-					producerId: producer.id,
-					kind: producer.kind,
-					peerId: socket.id,
-					client_id: room.peers.get(socket.id).client_id,
-					name: room.peers.get(socket.id).name,
-					isExaminer: room.peers.get(socket.id).isExaminer,
-				});
+				socket
+					.to(roomName)
+					.emit("new-producer", {
+						producerId: producer.id,
+						kind: producer.kind,
+						peerId: socket.id,
+						client_id: room.peers.get(socket.id).client_id,
+						name: room.peers.get(socket.id).name,
+						isExaminer: room.peers.get(socket.id).isExaminer,
+					});
 				callback({ id: producer.id });
 			} catch (e) {
 				console.error("Error producing:", e);
@@ -283,25 +285,14 @@ async function getOrCreateRoom(roomName) {
 		const worker = getNextWorker();
 		const router = await worker.createRouter({
 			mediaCodecs: [
-				// Audio
 				{ kind: "audio", mimeType: "audio/opus", clockRate: 48000, channels: 2 },
-
-				// VP8 + RTX
-				{ kind: "video", mimeType: "video/VP8", clockRate: 90000, parameters: {} },
-				{ kind: "video", mimeType: "video/rtx", clockRate: 90000, parameters: { apt: 96 } },
-
-				// H264 (baseline) + RTX
+				{ kind: "video", mimeType: "video/VP8", clockRate: 90000 },
 				{
 					kind: "video",
 					mimeType: "video/H264",
 					clockRate: 90000,
-					parameters: {
-						"packetization-mode": 1,
-						"profile-level-id": "42e01f",
-						"level-asymmetry-allowed": 1,
-					},
+					parameters: { "packetization-mode": 1, "profile-level-id": "42e01f", "level-asymmetry-allowed": 1 },
 				},
-				{ kind: "video", mimeType: "video/rtx", clockRate: 90000, parameters: { apt: 102 } },
 			],
 		});
 		room = { router, peers: new Map() };
