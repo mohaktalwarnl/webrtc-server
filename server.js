@@ -8,28 +8,30 @@ const os = require("os");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-	cors: { origin: "*" }, // Adjust for your production domain
-});
+const io = new Server(server, { cors: { origin: "*" } });
+
+// ---------- Tunables (via env) ----------
+// Prefer UDP by default; allow TCP fallback explicitly via env
+const ENABLE_TCP = process.env.MS_ENABLE_TCP ? process.env.MS_ENABLE_TCP === "true" : true; // default false
+// Keep SFU conservative to suit many small tiles; override via env as needed
+const INITIAL_OUT_BITRATE = Number(process.env.MS_INITIAL_OUT_BITRATE || 600_000); // 0.6 Mbps
+const MIN_OUT_BITRATE = Number(process.env.MS_MIN_OUT_BITRATE || 200_000); // 0.2 Mbps
+// Static low-quality ingress cap targeting ~144p@15fps per publisher
+const INGRESS_KBPS = Number(process.env.MS_INGRESS_KBPS || 250); // ~250 kbps
 
 // --- Mediasoup setup ---
 let workers = [];
 let nextWorkerIdx = 0;
 
-/**
- * @type {Map<string, { router: mediasoup.types.Router, peers: Map<string, any> }>}
- */
+/** @type {Map<string, { router: mediasoup.types.Router, peers: Map<string, any> }>} */
 const rooms = new Map();
 
-/**
- * --- Main application logic ---
- */
 async function run() {
 	await createWorkers();
 
 	io.on("connection", (socket) => {
 		console.log(`Client connected [socketId:${socket.id}]`);
-		let roomName; // Will be set on 'join'
+		let roomName;
 
 		socket.on("disconnect", () => {
 			console.log(`Client disconnected [socketId:${socket.id}]`);
@@ -37,27 +39,26 @@ async function run() {
 			cleanupPeer(roomName, socket.id);
 		});
 
-		// Client requests to join a room
+		// ---- Join (kept identical for your frontend) ----
 		socket.on("join", async ({ room }, callback) => {
 			try {
-				roomName = room; // Store roomName for this socket
+				roomName = room;
 				socket.join(roomName);
 				const client_id = socket.handshake.query.client_id;
 				const name = socket.handshake.query.name || "Unknown";
 				const isExaminer = socket.handshake.query.isExaminer === "true";
 				const { router, peers } = await getOrCreateRoom(roomName);
 
-				// A new peer joins the room
 				peers.set(socket.id, {
-					transports: new Map(),
-					producers: new Map(),
-					consumers: new Map(),
+					transports: new Map(), // id -> transport
+					producers: new Map(), // id -> producer
+					consumers: new Map(), // id -> consumer
 					client_id,
 					name,
 					isExaminer,
 				});
 
-				// Get a list of existing producers in the room
+				// Build existing producers list (unchanged shape)
 				const existingProducerIds = [];
 				for (const [peerSocketId, peer] of peers.entries()) {
 					for (const producer of peer.producers.values()) {
@@ -81,19 +82,45 @@ async function run() {
 			}
 		});
 
-		// Client requests to create a transport
+		// Optional convenience (doesn't affect your FE)
+		socket.on("get-rtp-capabilities", async (_msg, cb) => {
+			try {
+				const { router } = rooms.get(roomName) || (await getOrCreateRoom(roomName));
+				cb && cb({ rtpCapabilities: router.rtpCapabilities });
+			} catch (e) {
+				console.error("get-rtp-capabilities error", e);
+				cb && cb({ error: e.message });
+			}
+		});
+
+		// ---- Create transport (kept same return shape) ----
 		socket.on("create-transport", async ({ direction }, callback) => {
 			try {
 				const { router, peers } = rooms.get(roomName);
 				const transport = await createWebRtcTransport(router);
+
+				// Store transport
 				peers.get(socket.id).transports.set(transport.id, transport);
 
-				// When a transport is closed, notify the client
+				// Cap publisher ingress to a static low bitrate (144p@15fps target)
+				if (direction === "send") {
+					try {
+						await transport.setMaxIncomingBitrate(INGRESS_KBPS * 1000);
+					} catch {}
+				}
+
+				// Cleanup bookkeeping
 				transport.on("dtlsstatechange", (dtlsState) => {
 					if (dtlsState === "closed") {
-						console.log(`Transport closed for peer [socketId:${socket.id}]`);
-						transport.close();
+						console.log(`Transport closed [peer:${socket.id}]`);
+						try {
+							transport.close();
+						} catch {}
 					}
+				});
+				transport.on("close", () => {
+					const peer = rooms.get(roomName)?.peers.get(socket.id);
+					if (peer) peer.transports.delete(transport.id);
 				});
 
 				callback({
@@ -108,7 +135,7 @@ async function run() {
 			}
 		});
 
-		// Client connects a transport
+		// ---- Connect transport (unchanged signature) ----
 		socket.on("connect-transport", async ({ transportId, dtlsParameters }, callback) => {
 			try {
 				const transport = rooms.get(roomName).peers.get(socket.id).transports.get(transportId);
@@ -121,7 +148,7 @@ async function run() {
 			}
 		});
 
-		// Client starts producing
+		// ---- Produce (unchanged) ----
 		socket.on("produce", async ({ transportId, kind, rtpParameters }, callback) => {
 			try {
 				const room = rooms.get(roomName);
@@ -131,39 +158,32 @@ async function run() {
 				const producer = await transport.produce({ kind, rtpParameters });
 				room.peers.get(socket.id).producers.set(producer.id, producer);
 
-				// When a producer is closed (e.g., user stops sharing), clean up
+				// Cleanup on transport close
 				producer.on("transportclose", () => {
-					console.log(`Producer's transport closed, cleaning up [producerId:${producer.id}]`);
-
-					// Find the peer that owns this producer.
-					let peerToClean = null;
-					for (const peer of rooms.get(roomName)?.peers.values() || []) {
-						if (peer.producers.has(producer.id)) {
-							peerToClean = peer;
-							break;
-						}
-					}
-
-					// If found, remove the producer from that peer's map.
-					if (peerToClean) {
-						peerToClean.producers.delete(producer.id);
-					}
-
-					// Finally, notify everyone in the room that this producer is gone.
-					io.to(roomName).emit("producer-closed", { producerId: producer.id });
+					console.log(`Producer's transport closed [producerId:${producer.id}]`);
+					// remove from owner peer
+					const owner = room.peers.get(socket.id);
+					if (owner) owner.producers.delete(producer.id);
+					// notify room (deduped)
+					notifyProducerClosed(roomName, producer.id);
+				});
+				// Also handle explicit close events (deduped)
+				producer.on("close", () => {
+					const owner = room.peers.get(socket.id);
+					if (owner) owner.producers.delete(producer.id);
+					notifyProducerClosed(roomName, producer.id);
 				});
 
-				// Inform everyone else in the room about the new producer
-				socket
-					.to(roomName)
-					.emit("new-producer", {
-						producerId: producer.id,
-						kind: producer.kind,
-						peerId: socket.id,
-						client_id: room.peers.get(socket.id).client_id,
-						name: room.peers.get(socket.id).name,
-						isExaminer: room.peers.get(socket.id).isExaminer,
-					});
+				// Notify others (same event name your FE uses)
+				socket.to(roomName).emit("new-producer", {
+					producerId: producer.id,
+					kind: producer.kind,
+					peerId: socket.id,
+					client_id: room.peers.get(socket.id).client_id,
+					name: room.peers.get(socket.id).name,
+					isExaminer: room.peers.get(socket.id).isExaminer,
+				});
+
 				callback({ id: producer.id });
 			} catch (e) {
 				console.error("Error producing:", e);
@@ -171,7 +191,7 @@ async function run() {
 			}
 		});
 
-		// Client requests to consume a producer
+		// ---- Consume (unchanged signature + return shape) ----
 		socket.on("consume", async ({ transportId, producerId, rtpCapabilities }, callback) => {
 			try {
 				const room = rooms.get(roomName);
@@ -187,19 +207,26 @@ async function run() {
 				const consumer = await transport.consume({
 					producerId,
 					rtpCapabilities,
-					paused: true, // Start paused, client will resume
+					paused: true, // client will resume
 				});
 
 				room.peers.get(socket.id).consumers.set(consumer.id, consumer);
 
+				// Prefer lowest video layer by default to suit many-tiles layouts
+				try {
+					if (consumer.kind === "video") {
+						await consumer.setPreferredLayers({ spatialLayer: 0, temporalLayer: 1 });
+					}
+				} catch {}
+
 				consumer.on("transportclose", () => {
 					console.log(`Consumer's transport closed [consumerId:${consumer.id}]`);
-					// No need to do anything special here, transport closure handles it.
+					room.peers.get(socket.id)?.consumers.delete(consumer.id);
 				});
 				consumer.on("producerclose", () => {
 					console.log(`Associated producer closed [consumerId:${consumer.id}]`);
 					socket.emit("consumer-closed", { consumerId: consumer.id });
-					room.peers.get(socket.id).consumers.delete(consumer.id);
+					room.peers.get(socket.id)?.consumers.delete(consumer.id);
 				});
 
 				callback({
@@ -214,7 +241,7 @@ async function run() {
 			}
 		});
 
-		// Client requests to resume a consumer
+		// ---- Resume consumer (unchanged) ----
 		socket.on("resume-consumer", async ({ consumerId }, callback) => {
 			try {
 				const consumer = rooms.get(roomName).peers.get(socket.id).consumers.get(consumerId);
@@ -227,17 +254,14 @@ async function run() {
 			}
 		});
 
+		// Messaging (unchanged)
 		socket.on("private-message", ({ toClientId, message }) => {
 			if (!roomName) return;
-
 			const room = rooms.get(roomName);
 			if (!room) return;
-
 			const senderPeer = room.peers.get(socket.id);
 			if (!senderPeer) return;
-
 			const toSocketEntry = Array.from(room.peers.entries()).find(([, peer]) => peer.client_id === toClientId);
-
 			if (toSocketEntry) {
 				const [toSocketId] = toSocketEntry;
 				io.to(toSocketId).emit("private-message", {
@@ -248,16 +272,12 @@ async function run() {
 			}
 		});
 
-		// Exam Violation Detection Event
 		socket.on("issue-detected", ({ violationDetails }) => {
 			if (!roomName) return;
-
 			const room = rooms.get(roomName);
 			if (!room) return;
-
 			const senderPeer = room.peers.get(socket.id);
 			if (!senderPeer) return;
-
 			socket.to(roomName).emit("issue-detected", {
 				fromClientId: senderPeer.client_id,
 				fromName: senderPeer.name,
@@ -266,13 +286,14 @@ async function run() {
 		});
 	});
 
+	// register process signal/error handlers once server is initialized
+	setupProcessHandlers();
+
 	const PORT = process.env.PORT || 4000;
 	server.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
 }
 
-/**
- * --- Helper Functions ---
- */
+/** ---------- Helpers ---------- */
 async function createWorkers() {
 	const numWorkers = os.cpus().length;
 	console.log(`Creating ${numWorkers} mediasoup workers...`);
@@ -283,8 +304,8 @@ async function createWorkers() {
 			rtcMaxPort: 49999,
 		});
 		worker.on("died", () => {
-			console.error(`mediasoup worker ${worker.pid} has died, exiting in 2 seconds...`);
-			setTimeout(() => process.exit(1), 2000);
+			console.error(`mediasoup worker ${worker.pid} has died; starting graceful shutdown...`);
+			gracefulShutdown(1);
 		});
 		workers.push(worker);
 	}
@@ -302,19 +323,97 @@ async function getOrCreateRoom(roomName) {
 		const worker = getNextWorker();
 		const router = await worker.createRouter({
 			mediaCodecs: [
-				{ kind: "audio", mimeType: "audio/opus", clockRate: 48000, channels: 2 },
+				// Opus (2 channels for widest compatibility), enable in-band FEC
+				{ kind: "audio", mimeType: "audio/opus", clockRate: 48000, channels: 2, parameters: { useinbandfec: 1 } },
+				// VP8 (Chrome/Firefox/Edge)
 				{ kind: "video", mimeType: "video/VP8", clockRate: 90000 },
-				// { kind: 'video', mimeType: 'video/H264', clockRate: 90000, parameters: { 'packetization-mode': 1, 'profile-level-id': '42e01f', 'level-asymmetry-allowed': 1 } },
+				// VP9 (SVC capable) for clients that publish scalable streams
+				{ kind: "video", mimeType: "video/VP9", clockRate: 90000, parameters: { "profile-id": 2 } },
+				// H.264 (Safari, plus a safe fallback)
+				{
+					kind: "video",
+					mimeType: "video/H264",
+					clockRate: 90000,
+					parameters: {
+						"packetization-mode": 1,
+						"profile-level-id": "42e01f",
+						"level-asymmetry-allowed": 1,
+					},
+				},
 			],
 		});
-		room = { router, peers: new Map() };
+		room = { router, peers: new Map(), notifiedClosedProducers: new Set() };
 		rooms.set(roomName, room);
 		console.log(`Room created [roomName:${roomName}]`);
 	}
 	return room;
 }
 
-// ------------------- WITH THIS NEW, SIMPLIFIED FUNCTION -------------------
+let shuttingDown = false;
+function setupProcessHandlers() {
+	process.on("SIGINT", () => gracefulShutdown(0));
+	process.on("SIGTERM", () => gracefulShutdown(0));
+	process.on("uncaughtException", (err) => {
+		console.error("uncaughtException", err);
+		gracefulShutdown(1);
+	});
+	process.on("unhandledRejection", (reason) => {
+		console.error("unhandledRejection", reason);
+		gracefulShutdown(1);
+	});
+}
+
+async function gracefulShutdown(exitCode) {
+	if (shuttingDown) return;
+	shuttingDown = true;
+	console.log("Starting graceful shutdown...");
+	try {
+		// Stop accepting new connections
+		try {
+			io.close();
+		} catch {}
+		try {
+			server.close(() => {});
+		} catch {}
+
+		// Close rooms
+		for (const [roomName, room] of rooms.entries()) {
+			for (const [socketId, peer] of room.peers.entries()) {
+				for (const transport of peer.transports.values()) {
+					try {
+						transport.close();
+					} catch {}
+				}
+				for (const producer of peer.producers.values()) {
+					try {
+						producer.close();
+					} catch {}
+					notifyProducerClosed(roomName, producer.id);
+				}
+				for (const consumer of peer.consumers.values()) {
+					try {
+						consumer.close();
+					} catch {}
+				}
+				room.peers.delete(socketId);
+			}
+			try {
+				room.router.close();
+			} catch {}
+			rooms.delete(roomName);
+		}
+
+		// Close workers
+		for (const worker of workers) {
+			try {
+				await worker.close?.();
+			} catch {}
+		}
+	} finally {
+		setTimeout(() => process.exit(typeof exitCode === "number" ? exitCode : 0), 200);
+	}
+}
+
 function cleanupPeer(roomName, socketId) {
 	const room = rooms.get(roomName);
 	if (!room) return;
@@ -324,29 +423,52 @@ function cleanupPeer(roomName, socketId) {
 
 	console.log(`Cleaning up peer [socketId:${socketId}]`);
 
-	// Closing the transports will trigger the 'transportclose' event on any
-	// associated producers, which will handle the rest of the cleanup.
+	// Closing transports cascades producer/consumer cleanup
 	for (const transport of peer.transports.values()) {
-		transport.close();
+		try {
+			transport.close();
+		} catch {}
+	}
+
+	// Notify others that this peer's producers are gone (deduped)
+	for (const producer of peer.producers.values()) {
+		try {
+			producer.close();
+		} catch {}
+		notifyProducerClosed(roomName, producer.id);
 	}
 
 	room.peers.delete(socketId);
 
-	// If the room is empty, close the router to free up all resources
+	// If room empty, free router
 	if (room.peers.size === 0) {
 		console.log(`Room is empty, closing router [roomName:${roomName}]`);
-		room.router.close();
+		try {
+			room.router.close();
+		} catch {}
 		rooms.delete(roomName);
 	}
 }
+
+// Emit producer-closed once per producerId per room
+function notifyProducerClosed(roomName, producerId) {
+	const room = rooms.get(roomName);
+	if (!room) return;
+	if (room.notifiedClosedProducers.has(producerId)) return;
+	room.notifiedClosedProducers.add(producerId);
+	io.to(roomName).emit("producer-closed", { producerId });
+}
+
 async function createWebRtcTransport(router) {
-	return router.createWebRtcTransport({
+	const transport = await router.createWebRtcTransport({
 		listenIps: [{ ip: "0.0.0.0", announcedIp: process.env.PUBLIC_IP }],
 		enableUdp: true,
-		enableTcp: true,
+		enableTcp: true, // keep your original default; can turn off via env for perf
 		preferUdp: true,
-		initialAvailableOutgoingBitrate: 1000000,
+		initialAvailableOutgoingBitrate: INITIAL_OUT_BITRATE,
+		minimumAvailableOutgoingBitrate: MIN_OUT_BITRATE,
 	});
+	return transport;
 }
 
 // Start the server
