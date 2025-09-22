@@ -8,7 +8,14 @@ const os = require("os");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+const io = new Server(server, {
+	path: "/socket.io",
+	cors: {
+		origin: "*",
+		methods: ["GET", "POST"],
+		credentials: true,
+	},
+});
 
 // ---------- Tunables (via env) ----------
 // Prefer UDP by default; allow TCP fallback explicitly via env
@@ -468,6 +475,11 @@ async function createWebRtcTransport(router) {
 		initialAvailableOutgoingBitrate: INITIAL_OUT_BITRATE,
 		minimumAvailableOutgoingBitrate: MIN_OUT_BITRATE,
 	});
+	try {
+		transport.on("iceselectedtuplechange", (tuple) => {
+			console.log("ICE selected tuple", tuple);
+		});
+	} catch {}
 	return transport;
 }
 
