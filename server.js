@@ -279,7 +279,7 @@ async function run() {
 			}
 		});
 
-		socket.on("issue-detected", ({ violationDetails }) => {
+		socket.on("issue-detected", (violationData) => {
 			if (!roomName) return;
 			const room = rooms.get(roomName);
 			if (!room) return;
@@ -288,7 +288,7 @@ async function run() {
 			socket.to(roomName).emit("issue-detected", {
 				fromClientId: senderPeer.client_id,
 				fromName: senderPeer.name,
-				violationDetails,
+				violationData,
 			});
 		});
 	});
